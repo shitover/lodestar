@@ -332,7 +332,7 @@ export class PeerDiscovery {
       peersToConnect,
       peersAvailableToDial: cachedENRsToDial.size,
       subnetsToDiscover: subnetsToDiscoverPeers.length,
-      columnSubnetsToDiscover: columnSubnetsToDiscover.size,
+      columnSubnetsToDiscover: Array.from(columnSubnetsToDiscover).join(","),
       columnPeersToDiscover,
       shouldRunFindRandomNodeQuery,
     });
@@ -388,9 +388,8 @@ export class PeerDiscovery {
 
     const attnets = zeroAttnets;
     const syncnets = zeroSyncnets;
-    const custodySubnetCount = this.config.CUSTODY_REQUIREMENT;
 
-    const status = this.handleDiscoveredPeer(id, multiaddrs[0], attnets, syncnets, custodySubnetCount);
+    const status = this.handleDiscoveredPeer(id, multiaddrs[0], attnets, syncnets, undefined);
     this.logger.debug("Discovered peer via libp2p", {peer: prettyPrintPeerId(id), status});
     this.metrics?.discovery.discoveredStatus.inc({status});
   };
@@ -432,7 +431,7 @@ export class PeerDiscovery {
       multiaddrTCP,
       attnets,
       syncnets,
-      custodySubnetCount ?? this.config.CUSTODY_REQUIREMENT
+      custodySubnetCount
     );
     this.logger.debug("Discovered peer via discv5", {peer: prettyPrintPeerId(peerId), status, custodySubnetCount});
     this.metrics?.discovery.discoveredStatus.inc({status});
@@ -446,7 +445,7 @@ export class PeerDiscovery {
     multiaddrTCP: Multiaddr,
     attnets: boolean[],
     syncnets: boolean[],
-    custodySubnetCount: number
+    custodySubnetCount?: number
   ): DiscoveredPeerStatus {
     const nodeId = computeNodeId(peerId);
     this.logger.warn("handleDiscoveredPeer", {nodeId: toHexString(nodeId), peerId: peerId.toString()});
@@ -476,7 +475,7 @@ export class PeerDiscovery {
         multiaddrTCP,
         subnets: {attnets, syncnets},
         addedUnixMs: Date.now(),
-        peerCustodySubnets: getDataColumnSubnets(nodeId, custodySubnetCount),
+        peerCustodySubnets: getDataColumnSubnets(nodeId, custodySubnetCount ?? this.config.CUSTODY_REQUIREMENT),
       };
 
       // Only dial peer if necessary
