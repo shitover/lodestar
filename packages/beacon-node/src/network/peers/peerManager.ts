@@ -79,6 +79,10 @@ export type PeerManagerOpts = {
    * If set to true, connect to Discv5 bootnodes. If not set or false, do not connect
    */
   connectToDiscv5Bootnodes?: boolean;
+  // experimental flags for debugging
+  // TODO-das: remove
+  onlyConnectToBiggerDataNodes?: boolean;
+  onlyConnectToMinimalCustodyOverlapNodes?: boolean;
 } & PrioritizePeersOpts;
 
 /**
@@ -202,6 +206,8 @@ export class PeerManager {
           discv5FirstQueryDelayMs: opts.discv5FirstQueryDelayMs ?? DEFAULT_DISCV5_FIRST_QUERY_DELAY_MS,
           discv5: opts.discv5,
           connectToDiscv5Bootnodes: opts.connectToDiscv5Bootnodes,
+          onlyConnectToBiggerDataNodes: opts.onlyConnectToBiggerDataNodes,
+          onlyConnectToMinimalCustodyOverlapNodes: opts.onlyConnectToMinimalCustodyOverlapNodes,
         })
       : null;
 
@@ -420,6 +426,8 @@ export class PeerManager {
         (acc, elem) => acc + (peerCustodySubnets.includes(elem) ? 1 : 0),
         0
       );
+      const hasAllColumns = matchingSubnetsNum === this.sampleSubnets.length;
+      const hasMinCustodyMatchingColumns = matchingSubnetsNum >= this.config.CUSTODY_REQUIREMENT;
       const clientAgent = peerData?.agentClient ?? ClientKind.Unknown;
 
       this.logger.warn(`onStatus ${custodySubnetCount == undefined ? "undefined custody count assuming 4" : ""}`, {
@@ -427,11 +435,28 @@ export class PeerManager {
         myNodeId: toHexString(this.nodeId),
         peerId: peer.toString(),
         custodySubnetCount,
+        hasAllColumns,
         matchingSubnetsNum,
         peerCustodySubnets: peerCustodySubnets.join(" "),
         mySampleSubnets: this.sampleSubnets.join(" "),
         clientAgent,
       });
+
+      if (this.opts.onlyConnectToBiggerDataNodes && !hasAllColumns) {
+        this.logger.debug(`ignoring peercontected onlyConnectToBiggerDataNodes=true hasAllColumns=${hasAllColumns}`, {
+          nodeId: toHexString(nodeId),
+          peerId: peer.toString(),
+        });
+        return;
+      }
+
+      if (this.opts.onlyConnectToMinimalCustodyOverlapNodes && !hasMinCustodyMatchingColumns) {
+        this.logger.debug(
+          `ignoring peercontected onlyConnectToMinimalCustodyOverlapNodes=true hasMinCustodyMatchingColumns=${hasMinCustodyMatchingColumns}`,
+          {nodeId: toHexString(nodeId), peerId: peer.toString()}
+        );
+        return;
+      }
 
       // TODO: could be optimized by directly using the previously calculated subnet
       const dataColumns = getDataColumns(nodeId, peerCustodySubnetCount);

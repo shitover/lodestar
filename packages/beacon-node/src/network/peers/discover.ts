@@ -31,6 +31,9 @@ export type PeerDiscoveryOpts = {
   discv5: LodestarDiscv5Opts;
   connectToDiscv5Bootnodes?: boolean;
   // experimental flags for debugging
+  // TODO-das: remove
+  onlyConnectToBiggerDataNodes?: boolean;
+  onlyConnectToMinimalCustodyOverlapNodes?: boolean;
 };
 
 export type PeerDiscoveryModules = {
@@ -104,6 +107,9 @@ type CachedENR = {
 export class PeerDiscovery {
   readonly discv5: Discv5Worker;
   private libp2p: Libp2p;
+  // TODO-das: remove nodeId and sampleSubnets once we remove onlyConnect* flag
+  private nodeId: NodeId;
+  private sampleSubnets: number[];
   private peerRpcScores: IPeerRpcScoreStore;
   private metrics: NetworkCoreMetrics | null;
   private logger: LoggerNode;
@@ -122,6 +128,9 @@ export class PeerDiscovery {
   private discv5FirstQueryDelayMs: number;
 
   private connectToDiscv5BootnodesOnStart: boolean | undefined = false;
+  // TODO-das: remove
+  private onlyConnectToBiggerDataNodes: boolean | undefined = false;
+  private onlyConnectToMinimalCustodyOverlapNodes: boolean | undefined = false;
 
   constructor(modules: PeerDiscoveryModules, opts: PeerDiscoveryOpts, discv5: Discv5Worker) {
     const {libp2p, peerRpcScores, metrics, logger, config, nodeId} = modules;
@@ -131,12 +140,21 @@ export class PeerDiscovery {
     this.logger = logger;
     this.config = config;
     this.discv5 = discv5;
+    // TODO-das: remove
+    this.nodeId = nodeId;
+    // we will only connect to peers that can provide us custody
+    this.sampleSubnets = getDataColumnSubnets(
+      nodeId,
+      Math.max(config.CUSTODY_REQUIREMENT, config.NODE_CUSTODY_REQUIREMENT, config.SAMPLES_PER_SLOT)
+    );
     this.columnSubnetRequests = new Map();
 
     this.discv5StartMs = 0;
     this.discv5StartMs = Date.now();
     this.discv5FirstQueryDelayMs = opts.discv5FirstQueryDelayMs;
     this.connectToDiscv5BootnodesOnStart = opts.connectToDiscv5Bootnodes;
+    this.onlyConnectToBiggerDataNodes = opts.onlyConnectToBiggerDataNodes;
+    this.onlyConnectToMinimalCustodyOverlapNodes = opts.onlyConnectToMinimalCustodyOverlapNodes;
 
     this.libp2p.addEventListener("peer:discovery", this.onDiscoveredPeer);
     this.discv5.on("discovered", this.onDiscoveredENR);
@@ -479,6 +497,37 @@ export class PeerDiscovery {
   }
 
   private shouldDialPeer(peer: CachedENR): boolean {
+    // begin onlyConnect* experimental logic
+    // TODO-das: remove
+    const nodeId = computeNodeId(peer.peerId);
+    const {peerCustodySubnets} = peer;
+    const peerCustodySubnetCount = peerCustodySubnets.length;
+
+    const matchingSubnetsNum = this.sampleSubnets.reduce(
+      (acc, elem) => acc + (peerCustodySubnets.includes(elem) ? 1 : 0),
+      0
+    );
+    const hasAllColumns = matchingSubnetsNum === this.sampleSubnets.length;
+    const hasMinCustodyMatchingColumns = matchingSubnetsNum >= Math.max(this.config.CUSTODY_REQUIREMENT);
+
+    this.logger.warn("peerCustodySubnets", {
+      peerId: peer.peerId.toString(),
+      peerNodeId: toHexString(nodeId),
+      hasAllColumns,
+      peerCustodySubnetCount,
+      peerCustodySubnets: peerCustodySubnets.join(" "),
+      sampleSubnets: this.sampleSubnets.join(" "),
+      nodeId: `${toHexString(this.nodeId)}`,
+    });
+    if (this.onlyConnectToBiggerDataNodes && !hasAllColumns) {
+      return false;
+    }
+
+    if (this.onlyConnectToMinimalCustodyOverlapNodes && !hasMinCustodyMatchingColumns) {
+      return false;
+    }
+    // end onlyConnect* experimental logic
+
     // starting from PeerDAS fork, we need to make sure we have stable subnet sampling peers first
     // given CUSTODY_REQUIREMENT = 4 and 100 peers, we have 400 custody columns from peers
     // with NUMBER_OF_COLUMNS = 128, we have 400 / 128 = 3.125 peers per column in average
@@ -486,7 +535,6 @@ export class PeerDiscovery {
     // after some first heartbeats, we should have no more column requested, then go with conditions of prior forks
     let hasMatchingColumn = false;
     let columnRequestCount = 0;
-    const {peerCustodySubnets} = peer;
     for (const [column, peersToConnect] of this.columnSubnetRequests.entries()) {
       if (peersToConnect <= 0) {
         this.columnSubnetRequests.delete(column);
