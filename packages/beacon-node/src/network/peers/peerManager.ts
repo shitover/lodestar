@@ -340,10 +340,10 @@ export class PeerManager {
           this.config.CUSTODY_REQUIREMENT,
         custodySubnets,
       };
-      // TODO: why request status again?
-      // if (oldMetadata === null || oldMetadata.csc !== peerData.metadata.csc) {
-      //   void this.requestStatus(peer, this.statusCache.get());
-      // }
+      // request status again in order to update network's datacolumns of this peer
+      if (oldMetadata === null || oldMetadata.csc !== peerData.metadata.csc) {
+        void this.requestStatus(peer, this.statusCache.get());
+      }
     }
   }
 
